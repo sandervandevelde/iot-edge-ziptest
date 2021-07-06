@@ -10,12 +10,16 @@ namespace ZipTestModule
     using System.Threading.Tasks;
     using Microsoft.Azure.Devices.Client;
     using Microsoft.Azure.Devices.Client.Transport.Mqtt;
-
+    using Microsoft.Azure.Devices.Shared;
+    using Newtonsoft.Json;
     using ZipHelperLib;
 
     class Program
     {
         static int counter;
+
+        private static bool DefaultUseGZip = true;
+        private static bool UseGZip {get; set; } = DefaultUseGZip;
 
         static void Main(string[] args)
         {
@@ -49,6 +53,13 @@ namespace ZipTestModule
 
             // Open a connection to the Edge runtime
             ModuleClient ioTHubModuleClient = await ModuleClient.CreateFromEnvironmentAsync(settings);
+
+            // Execute callback method for Twin desired properties updates
+            var twin = await ioTHubModuleClient.GetTwinAsync();
+            await onDesiredPropertiesUpdate(twin.Properties.Desired, ioTHubModuleClient);
+
+            Console.WriteLine($"Desired properties supported: useGZip ({UseGZip})."); 
+
             await ioTHubModuleClient.OpenAsync();
             Console.WriteLine("IoT Hub module client 'iot-edge-ziptest' initialized.");
 
@@ -79,14 +90,25 @@ namespace ZipTestModule
 
             if (!string.IsNullOrEmpty(messageString))
             {
-                var zippedMessageBytes = GZipHelper.Zip(messageBytes);                
+                var zippedMessageBytes = UseGZip 
+                                            ? GZipHelper.Zip(messageBytes)
+                                            : DeflateHelper.Zip(messageBytes);                
 
                 Console.WriteLine($"Received message: {counterValue}, Body: [{messageString}], length {messageBytes.Length} bytes zipped to {zippedMessageBytes.Length} bytes");
 
                 using (var pipeMessage = new Message(zippedMessageBytes))
                 {
-                    pipeMessage.ContentEncoding = "gzip";
+                    if (UseGZip)
+                    {
+                        pipeMessage.ContentEncoding = "gzip";
+                    }
+                    else
+                    {
+                        pipeMessage.ContentEncoding = "deflate";
+                    }
+
                     pipeMessage.ContentType = "application/zip";
+
 
                     foreach (var prop in message.Properties)
                     {
@@ -95,10 +117,76 @@ namespace ZipTestModule
 
                     await moduleClient.SendEventAsync("output1", pipeMessage);
                 
-                    Console.WriteLine("Received message sent");
+                    var compressionType = UseGZip? "GZip" : "deflate";
+
+                    Console.WriteLine($"Received message sent using {compressionType} compression type.");
                 }
             }
             return MessageResponse.Completed;
+        }
+
+        private static async Task onDesiredPropertiesUpdate(TwinCollection desiredProperties, object userContext)
+        {
+            if (desiredProperties.Count == 0)
+            {
+                Console.WriteLine("Empty desired properties ignored.");
+
+                return;
+            }
+
+            try
+            {
+                Console.WriteLine("Desired property change:");
+                Console.WriteLine(JsonConvert.SerializeObject(desiredProperties));
+
+                var client = userContext as ModuleClient;
+
+                if (client == null)
+                {
+                    throw new InvalidOperationException($"UserContext doesn't contain expected ModuleClient");
+                }
+
+                var reportedProperties = new TwinCollection();
+
+                if (desiredProperties.Contains("useGZip"))
+                {
+                    if (desiredProperties["useGZip"] != null)
+                    {
+                        UseGZip = Convert.ToBoolean(desiredProperties["useGZip"]);
+                    }
+                    else
+                    {
+                        UseGZip = DefaultUseGZip;
+                    }
+
+                    Console.WriteLine($"UseGZip changed to {UseGZip}");
+
+                    reportedProperties["useGZip"] = UseGZip;
+                }
+                else
+                {
+                    Console.WriteLine($"UseGZip ignored");
+                }
+
+
+                if (reportedProperties.Count > 0)
+                {
+                    await client.UpdateReportedPropertiesAsync(reportedProperties);
+                }
+            }
+            catch (AggregateException ex)
+            {
+                Console.WriteLine($"Desired properties change error: {ex.Message}");
+
+                foreach (Exception exception in ex.InnerExceptions)
+                {
+                    Console.WriteLine($"Error when receiving desired properties: {exception}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error when receiving desired properties: {ex.Message}");
+            }
         }
     }
 }

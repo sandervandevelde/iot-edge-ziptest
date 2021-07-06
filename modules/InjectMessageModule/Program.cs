@@ -10,7 +10,7 @@ namespace InjectMessageModule
     using System.Threading.Tasks;
     using Microsoft.Azure.Devices.Client;
     using Microsoft.Azure.Devices.Client.Transport.Mqtt;
-
+    using Microsoft.Azure.Devices.Shared;
     using Newtonsoft.Json;
 
     class Program
@@ -47,6 +47,7 @@ namespace InjectMessageModule
 
             // Open a connection to the Edge runtime
             ModuleClient ioTHubModuleClient = await ModuleClient.CreateFromEnvironmentAsync(settings);
+
             await ioTHubModuleClient.OpenAsync();
             Console.WriteLine("IoT Hub module 'iot-edge-injectmessage' client initialized.");
 
